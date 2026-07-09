@@ -2,11 +2,13 @@
 import hashlib
 import hmac
 import os
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 
 import jwt
-from fastapi import Depends, Request
+from fastapi import Depends
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from .config import (
@@ -19,11 +21,22 @@ from .database import get_db
 from .errors import AppError
 from .models import User
 
-# Access tokens presented to /auth/logout are recorded here so they can no
-# longer be used.
+# Access tokens presented to /auth/logout, and refresh tokens already
+# exchanged via /auth/refresh, are recorded here (by jti) so they can no
+# longer be used. Guarded by _token_lock since requests are served from a
+# thread pool.
 _revoked_tokens: set[str] = set()
+_used_refresh_tokens: set[str] = set()
+_token_lock = threading.Lock()
 
 _PBKDF2_ROUNDS = 100_000
+
+# auto_error=False so a missing/malformed header falls through to our own
+# AppError instead of FastAPI's default 403 "Not authenticated", keeping the
+# 401 UNAUTHORIZED contract. Using HTTPBearer (rather than reading the
+# Authorization header off the raw Request) is what makes FastAPI register a
+# security scheme and show the "Authorize" button in /docs.
+_bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def hash_password(password: str) -> str:
@@ -47,7 +60,7 @@ def _now_ts() -> int:
 
 def create_access_token(user: User) -> str:
     iat = _now_ts()
-    lifetime = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES * 60)
+    lifetime = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     payload = {
         "sub": str(user.id),
         "org": user.org_id,
@@ -83,18 +96,30 @@ def decode_token(token: str) -> dict:
 
 
 def revoke_access_token(payload: dict) -> None:
-    _revoked_tokens.add(payload["jti"])
+    with _token_lock:
+        _revoked_tokens.add(payload["jti"])
 
 
-def get_token_payload(request: Request) -> dict:
-    header = request.headers.get("Authorization")
-    if not header or not header.startswith("Bearer "):
+def consume_refresh_token(payload: dict) -> None:
+    """Mark a refresh token's jti as used, rejecting it if already used."""
+    jti = payload.get("jti")
+    with _token_lock:
+        if jti in _used_refresh_tokens:
+            raise AppError(401, "UNAUTHORIZED", "Refresh token already used")
+        _used_refresh_tokens.add(jti)
+
+
+def get_token_payload(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+) -> dict:
+    if credentials is None:
         raise AppError(401, "UNAUTHORIZED", "Missing bearer token")
-    token = header[len("Bearer "):].strip()
-    payload = decode_token(token)
+    payload = decode_token(credentials.credentials)
     if payload.get("type") != "access":
         raise AppError(401, "UNAUTHORIZED", "Wrong token type")
-    if payload.get("sub") in _revoked_tokens:
+    with _token_lock:
+        revoked = payload.get("jti") in _revoked_tokens
+    if revoked:
         raise AppError(401, "UNAUTHORIZED", "Token has been revoked")
     return payload
 
