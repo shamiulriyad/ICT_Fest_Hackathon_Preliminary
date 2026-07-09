@@ -458,3 +458,13 @@ id,reference_code,room_id,user_id,start_time,end_time,status,price_cents
 codes, JSON field names, JWT claims). Grading is **black-box**: the grader builds
 the container and asserts behavior against the business rules and API contract
 above by talking to the API only.
+
+
+
+---
+
+## Collaborators
+
+* **[Shamiul Islam Riyad](https://github.com/shamiulriyad)** - Core Developer
+* **[Sayem Rahman](https://github.com/SayemR0018)** - QA & Bug Tester
+* **[Rabbi Islam Emon](https://github.com/iamrabbiislamemon)** - Code Reviewer
