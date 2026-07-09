@@ -1,0 +1,2 @@
+id,reference_code,room_id,user_id,start_time,end_time,status,price_cents
+3,CW-001002,4,7,2026-07-20T10:00:00+00:00,2026-07-20T12:00:00+00:00,confirmed,3000
